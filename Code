@@ -1,0 +1,71 @@
+from flask import Flask, render_template, request
+import wolframalpha
+import openai
+from PIL import Image
+import requests
+import io
+import base64
+
+app = Flask(__name__)
+
+# Set up the Wolfram Alpha and OpenAI API keys
+wolfram_alpha_app_id = "UT93AY-4K35T5AU4K"
+openai_api_key = "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"
+
+# Initialize the API clients
+wolfram_client = wolframalpha.Client(wolfram_alpha_app_id)
+openai.api_key = openai_api_key
+
+@app.route('/')
+def home():
+    return render_template('home.html')
+
+@app.route('/process_equation', methods=['POST'])
+def process_equation():
+    # Retrieve the equation data from the request
+    equation = request.form['equation']
+
+    # Step 1: Query Wolfram Alpha to solve the equation
+    res = wolfram_client.query(equation)
+    
+    # Extract the plain text result from Wolfram Alpha
+    result = next(res.results).text
+    
+    # Step 2: Use OpenAI API to generate a plot description based on the equation
+    prompt = f"Plot the graph of the equation: {equation}."
+    response = openai.Completion.create(
+        engine="davinci",
+        prompt=prompt,
+        max_tokens=100,
+        temperature=0.7
+    )
+    
+    # Extract the generated plot description from OpenAI response
+    plot_description = response.choices[0].text.strip()
+    
+    # Step 3: Query Wolfram Alpha to get the plot image URL
+    res_full = wolfram_client.query(equation, podstate="Plot__Full")
+    plot_pod = next((pod for pod in res_full.pods if pod["@title"] == "Plot"), None)
+    
+    if plot_pod is not None:
+        plot_image_url = plot_pod["subpod"]["img"]["@src"]
+        
+        # Fetch the plot image
+        response = requests.get(plot_image_url)
+        plot_image_data = response.content
+        
+        # Create an in-memory image object from the image data
+        image = Image.open(io.BytesIO(plot_image_data))
+        
+        # Convert the image to base64 string
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format='PNG')
+        plot_image_base64 = base64.b64encode(image_buffer.getvalue()).decode('utf-8')
+        
+        # Return the result to the result.html template
+        return render_template('result.html', equation=equation, result=result, plot_description=plot_description, plot_image_base64=plot_image_base64)
+    else:
+        return "No plot found for the given equation."
+
+if __name__ == '__main__':
+    app.run()
